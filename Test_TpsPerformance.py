@@ -1,15 +1,20 @@
 
 
+import cProfile, pstats, datetime
+from io import BytesIO as StringIO
 import math
 import numpy
-import time
-millitime = lambda: int(round(time.time() * 1000))
+from os.path import expanduser, join
 
 
 Scale = 100.0
 WaveScale = 5.0
 NumPerEdge = 5         # Number of TPS point pairs will be the cube of this number
 NumExpFidsPerEdge = 3  # Number of experimental fiducials will be the cube of this number
+ModelResolution = 200  # Higher number will create a more detailed model
+
+Profiler = cProfile.Profile()
+Profiler.enable()
 
 
 # Create the FROM fiducial list, and hide it so it doesn't change with mouse interactions
@@ -60,13 +65,28 @@ tNode2.SetName( 'TpsTransform2' )
 slicer.mrmlScene.AddNode( tNode2 )
 
 tNode2.SetAndObserveTransformNodeID(tNode.GetID())
-skull_model = slicer.util.getFirstNodeByName('skull_model')
-skull_model.SetAndObserveTransformNodeID(tNode2.GetID())
+
+# Create a model to be transformed
+
+SphereSource = vtk.vtkSphereSource()
+SphereSource.SetRadius(Scale / 2.0)
+SphereSource.SetThetaResolution(ModelResolution)
+SphereSource.SetPhiResolution(ModelResolution)
+SphereSource.Update()
+
+ModelNode = slicer.vtkMRMLModelNode()
+slicer.mrmlScene.AddNode( ModelNode )
+ModelNode.SetName( "ModelNode" )
+ModelNode.SetAndObservePolyData( SphereSource.GetOutput() )
+
+DisplayNode = slicer.vtkMRMLModelDisplayNode()
+slicer.mrmlScene.AddNode(DisplayNode)
+ModelNode.SetAndObserveDisplayNodeID(DisplayNode.GetID())
+
+ModelNode.SetAndObserveTransformNodeID(tNode2.GetID())
+
 
 # Function that will be called whenever a TO fiducial moves and the transform needs an update
-
-start_setTime = 0
-end_setTime = 0
 
 def updateTpsTransform(caller, eventid):
   numPerEdge = fromFids.GetNumberOfFiducials()
@@ -95,11 +115,8 @@ def updateTpsTransform(caller, eventid):
   tps2.SetTargetLandmarks( fp )
   tps.SetBasisToR()
   
-  start_setTime = millitime()
   tNode.SetAndObserveTransformToParent( tps )
   tNode2.SetAndObserveTransformToParent( tps2 )
-  end_setTime = millitime()
-  print "SetAndObserveTransformToParent time = " + str(end_setTime - start_setTime)
 
 
 toFids.AddObserver(vtk.vtkCommand.ModifiedEvent, updateTpsTransform)
@@ -113,17 +130,7 @@ roi.SetDisplayVisibility(False)
 roi.SetXYZ(0, 0, 0)
 roi.SetRadiusXYZ(Scale / 2.0, Scale / 2.0, Scale / 2.0)
 
-# Set up transform visualization as gridlines
-
-tNode.CreateDefaultDisplayNodes()
-d = tNode.GetDisplayNode()
-d.SetAndObserveRegionNode(roi)
-d.SetVisualizationMode( slicer.vtkMRMLTransformDisplayNode.VIS_MODE_GRID)
-# d.SetVisibility(True)
-
 updateTpsTransform(None, None)
-
-createStartTime = millitime()
 
 # Create new fiducial list and transform fiducials using the deformation
 
@@ -146,28 +153,24 @@ expFids.GetDisplayNode().SetVisibility(True)
 expFids.GetDisplayNode().SetTextScale(0)
 expFids.GetDisplayNode().SetSelectedColor(1,1,0)
 
-createEndTime = millitime()
-
-
-startTime = millitime()
-
 numExpFids = expFids.GetNumberOfFiducials()
 for i in range(numExpFids):
   p = numpy.zeros(4)
   expFids.GetNthFiducialWorldCoordinates(i, p)
 
-endTime = millitime()
-
-
-print "SetAndObserveTransformToParent time = " + str(end_setTime - start_setTime)
-print "Experimental fiducials create time (ms) = " + str(createEndTime - createStartTime)
-print "Processed points (N) = " + str(numExpFids)
-print "Processing time (ms) = " + str(endTime - startTime)
-
-
-
-start_time = millitime()
 updateTpsTransform(None, None)
-end_time = millitime()
-print "Update function total = " str(end_time - start_time)
 
+Profiler.disable()
+StatsString = StringIO()
+SortBy = u'name'
+ProfileStats = pstats.Stats(Profiler, stream=StatsString).sort_stats(SortBy)
+ProfileStats.print_stats()
+out = StatsString.getvalue()
+print(out)
+
+home = expanduser("~")
+FileName = join( home, "TpsTest_{0}.txt".format(str(datetime.datetime.now())).replace(':', '_') )
+
+
+with open(FileName, 'w') as outfile:
+  outfile.write(out)
